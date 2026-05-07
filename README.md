@@ -5,9 +5,11 @@ A pure-Python library to repair common LaTeX and math formatting errors generate
 ## Features
 
 - **Delimiter Normalization**: Converts mixed `$`, `$$`, `\(`, and `\[` to standard LaTeX delimiters.
+- **Nested Delimiter Unwrapping**: Detects and removes redundant nested tags like `\(\infty\)` inside larger blocks.
 - **Backslash Repair**: Automatically adds missing backslashes for common LaTeX commands (e.g., `lambda` -> `\lambda`).
 - **Delimiter deduplication**: Fixes over-escaped delimiters like `\\(` into `\(`.
 - **Intelligent Wrapping**: Detects bare math tokens like `x_i` or `alpha_L` and wraps them in inline math delimiters.
+- **Standalone Math Support**: Recognizes and wraps complex multi-part math strings (e.g. comma-separated series) even if they contain internal fragments.
 - **Anki Support**: Specifically handles Anki's `<anki-mathjax>` tags.
 
 ## Usage
