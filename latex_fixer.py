@@ -23,6 +23,9 @@ def normalize_math_text(text: str) -> str:
     text = _normalize_overescaped_math_delimiters(text)
     text = _normalize_anki_mathjax_tags(text)
     
+    # Normalize unescaped [ ... ] and ( ... ) that look like math
+    text = _normalize_plain_math_delimiters(text)
+    
     # Run this before dollar/mixed normalization so we don't double-process
     text = _repair_standalone_commands(text)
     
@@ -33,16 +36,17 @@ def normalize_math_text(text: str) -> str:
     # Updated to handle multiple slashes more robustly
     text = re.sub(
         r'\\+[\(\[](.*?)\\+[\)\]]',
-        lambda m: (r'\(' if '(' in m.group(0) or '[' not in m.group(0) else r'\[') 
+        lambda m: (r'\(' if m.group(0).startswith(r'\(') or m.group(0).startswith('(') else r'\[') 
                   + _fix_latex_span(m.group(1)) 
-                  + (r'\)' if ')' in m.group(0) or ']' not in m.group(0) else r'\]'),
+                  + (r'\)' if m.group(0).startswith(r'\(') or m.group(0).startswith('(') else r'\]'),
         text,
         flags=re.DOTALL,
     )
 
     if "<anki-mathjax" not in text.lower():
         if _should_wrap_standalone_math(text):
-            text = r'\(' + _fix_latex_span(text.strip()) + r'\)'
+            inner = _unwrap_math_delimiters_inside_span(text.strip())
+            text = r'\(' + _fix_latex_span(inner) + r'\)'
         else:
             text = _wrap_parenthetical_math(text)
             text = _wrap_bare_math_tokens(text)
@@ -90,6 +94,50 @@ def _normalize_dollar_math_delimiters(text: str) -> str:
         convert_inline,
         text,
     )
+
+def _normalize_plain_math_delimiters(text: str) -> str:
+    protected = _math_block_ranges(text)
+    text = _normalize_plain_display_delimiters(text, protected)
+    protected = _math_block_ranges(text)
+    text = _normalize_plain_open_escaped_close(text, protected)
+    return text
+
+def _normalize_plain_display_delimiters(text: str, protected_ranges: List[Tuple[int, int]] = None) -> str:
+    protected_ranges = protected_ranges or []
+    result = []
+    i = 0
+    while i < len(text):
+        if (
+            text[i] != "["
+            or _is_escaped(text, i)
+            or _index_in_ranges(i, protected_ranges)
+        ):
+            result.append(text[i])
+            i += 1
+            continue
+
+        # Avoid matching [A-Za-z0-9] before the bracket (might be a list/index)
+        if i > 0 and re.match(r'[A-Za-z0-9]', text[i - 1]):
+            result.append(text[i])
+            i += 1
+            continue
+
+        close = _find_next_unescaped_close_bracket(text, i + 1)
+        if close == -1:
+            result.append(text[i])
+            i += 1
+            continue
+
+        inner = text[i + 1:close]
+        if _looks_like_math_span(_unwrap_math_delimiters_inside_span(inner)):
+            result.append(r'\[')
+            result.append(_fix_latex_span(inner))
+            result.append(r'\]')
+            i = close + 1
+        else:
+            result.append(text[i])
+            i += 1
+    return "".join(result)
 
 def _normalize_mixed_math_delimiters(text: str) -> str:
     protected = _math_block_ranges(text)
@@ -487,11 +535,18 @@ def _should_wrap_standalone_math(text: str) -> bool:
     if (
         not stripped
         or len(stripped) > 200
-        or re.search(r'\\[\(\[]|<anki-mathjax', stripped, flags=re.IGNORECASE)
         or not _looks_like_math_span(stripped)
     ):
         return False
-    if " " in stripped and not re.search(r'[=\\]', stripped):
+    
+    # If it's ALREADY fully wrapped, don't wrap again
+    if re.match(r'^\\+[\(\[]', stripped) and re.search(r'\\+[\)\]]$', stripped):
+        return False
+        
+    if "<anki-mathjax" in stripped.lower():
+        return False
+        
+    if " " in stripped and not re.search(r'[=\\]', stripped) and not "_" in stripped and not "^" in stripped:
         return False
     prose_probe = re.sub(r'\\[A-Za-z]+(?:_[A-Za-z0-9]+)?', ' ', stripped)
     prose_probe = re.sub(
@@ -523,21 +578,43 @@ def _repair_standalone_commands(text: str) -> str:
     
     temp_text = _MATH_BLOCK_RE.sub(protect, text)
     
-    # Fix standalone commands with braces: frac{...}{...}
+    # Fix standalone commands with braces/parens: frac{...}{...}, exp(...), sin(x)
     # Require non-backslash boundary before the command name
+    # We also handle optional surrounding parentheses: (exp(...)) -> \(exp(...)\)
+    def wrap_function(m):
+        prefix = m.group(1) or ""
+        func_name = m.group(2)
+        scripts = m.group(3) or ""
+        args = m.group(4)
+        suffix = m.group(5) or ""
+        
+        if prefix == "(" and suffix == ")":
+            return r'\(' + _fix_latex_span(func_name + scripts + args) + r'\)'
+        return prefix + r'\(' + _fix_latex_span(func_name + scripts + args) + r'\)' + suffix
+
     temp_text = re.sub(
-        r'(?<!\\)\b(frac|sqrt|sin|cos|tan|log|ln|sum|int)\s*(\{.*?\}\{.*?\}|\{.*?\}|\[.*?\])',
-        lambda m: r'\(' + _fix_latex_span(m.group(1) + m.group(2)) + r'\)',
-        temp_text
+        r'(\()? \s* \b(exp|frac|sqrt|sin|cos|tan|log|ln|sum|int|abs|norm)\b \s* ([_^](?:\{.*?\}|[^ \t\n\r\f\v]))? \s* (\{.*?\}\{.*?\}|\{.*?\}|\[.*?\]|\(.*?\)) \s* (\))?',
+        wrap_function,
+        temp_text,
+        flags=re.VERBOSE
     )
     
     # Fix standalone Greek letters: lambda, alpha, etc.
     cmd_pattern = "|".join(commands)
+    def wrap_standalone(m):
+        prefix = m.group(1) or ""
+        content = m.group(2)
+        suffix = m.group(3) or ""
+        
+        if prefix == "(" and suffix == ")":
+             return r'\(' + _fix_latex_span(content) + r'\)'
+        return prefix + r'\(' + _fix_latex_span(content) + r'\)' + suffix
+
     temp_text = re.sub(
-        rf'(?<!\\)\b({cmd_pattern})\b',
-        lambda m: r'\(' + _fix_latex_span(m.group(1)) + r'\)',
+        rf'(\()? \s* \b({cmd_pattern})\b \s* (\))?',
+        wrap_standalone,
         temp_text,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE | re.VERBOSE
     )
     
     # Restore protected
