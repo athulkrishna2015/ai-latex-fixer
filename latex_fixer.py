@@ -22,13 +22,15 @@ def normalize_math_text(text: str) -> str:
 
     text = _normalize_overescaped_math_delimiters(text)
     text = _normalize_anki_mathjax_tags(text)
+    
+    # Run this before dollar/mixed normalization so we don't double-process
+    text = _repair_standalone_commands(text)
+    
     text = _normalize_dollar_math_delimiters(text)
     text = _normalize_mixed_math_delimiters(text)
     
-    # New step: Identify and wrap potential math commands that are missing backslashes/delimiters
-    text = _repair_standalone_commands(text)
-    
     # Standardize delimiters and fix inner LaTeX.
+    # Updated to handle multiple slashes more robustly
     text = re.sub(
         r'\\+[\(\[](.*?)\\+[\)\]]',
         lambda m: (r'\(' if '(' in m.group(0) or '[' not in m.group(0) else r'\[') 
@@ -297,6 +299,10 @@ def _fix_latex_span(span: str) -> str:
         "alpha", "beta", "gamma", "delta", "epsilon", "phi", "theta",
         "omega", "mu", "nu", "pi", "rho", "sigma", "tau", "chi", "psi",
         "Delta", "Gamma", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Phi", "Psi", "Omega",
+        "varepsilon", "vartheta", "varkappa", "varpi", "varrho", "varsigma", "varphi",
+        "abs", "bra", "ket", "braket", "norm", "matrix", "pmatrix", "bmatrix", "vmatrix", "Vmatrix",
+        "binom", "cfrac", "coloneqq", "coloneq", "eqqcolon", "eqcolon",
+        "grad", "div", "curl", "nabla", "perp", "parallel", "angle", "degree", "deg",
     ]
     functions = ["exp", "sin", "cos", "tan", "log", "ln", "lim"]
     command_alt = "|".join(re.escape(cmd) for cmd in commands)
@@ -505,7 +511,8 @@ def _repair_standalone_commands(text: str) -> str:
         "lambda", "alpha", "beta", "gamma", "delta", "epsilon", "phi", "theta",
         "omega", "mu", "nu", "pi", "rho", "sigma", "tau", "chi", "psi",
         "Delta", "Gamma", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Phi", "Psi", "Omega",
-        "frac", "sqrt", "sin", "cos", "tan", "log", "ln", "sum", "int", "infty"
+        "frac", "sqrt", "sin", "cos", "tan", "log", "ln", "sum", "int", "infty",
+        "abs", "bra", "ket", "braket", "grad", "nabla", "perp", "angle"
     ]
     
     # Protect existing math blocks
@@ -516,10 +523,10 @@ def _repair_standalone_commands(text: str) -> str:
     
     temp_text = _MATH_BLOCK_RE.sub(protect, text)
     
-    # Fix standalone commands with braces first: frac{...}{...}
-    # We use a slightly more complex regex to handle common frac/sqrt patterns
+    # Fix standalone commands with braces: frac{...}{...}
+    # Require non-backslash boundary before the command name
     temp_text = re.sub(
-        r'\b(frac|sqrt|sin|cos|tan|log|ln|sum|int)\s*(\{.*?\}\{.*?\}|\{.*?\}|\[.*?\])',
+        r'(?<!\\)\b(frac|sqrt|sin|cos|tan|log|ln|sum|int)\s*(\{.*?\}\{.*?\}|\{.*?\}|\[.*?\])',
         lambda m: r'\(' + _fix_latex_span(m.group(1) + m.group(2)) + r'\)',
         temp_text
     )
@@ -527,7 +534,7 @@ def _repair_standalone_commands(text: str) -> str:
     # Fix standalone Greek letters: lambda, alpha, etc.
     cmd_pattern = "|".join(commands)
     temp_text = re.sub(
-        rf'\b({cmd_pattern})\b',
+        rf'(?<!\\)\b({cmd_pattern})\b',
         lambda m: r'\(' + _fix_latex_span(m.group(1)) + r'\)',
         temp_text,
         flags=re.IGNORECASE
