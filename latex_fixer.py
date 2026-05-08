@@ -473,7 +473,11 @@ def _unwrap_math_delimiters_inside_span(span: str) -> str:
         span = re.sub(r'\$\$([\s\S]*?)\$\$', r'\1', span)
         span = re.sub(r'\$([\s\S]*?)\$', r'\1', span)
         span = span.strip()
-    return span
+    
+    # Remove dangling single delimiters at start/end
+    span = re.sub(r'^(\\\(|\\\[|\$\$|\$)', '', span)
+    span = re.sub(r'(\\\)|\\\]|\$\$|\$)$', '', span)
+    return span.strip()
 
 def _wrap_parenthetical_math(text: str) -> str:
     parts = []
@@ -607,7 +611,8 @@ def _should_wrap_standalone_math(text: str) -> bool:
         return False
 
     # Don't wrap if there's more than one potential word (prose)
-    prose_probe = re.sub(r'\\[A-Za-z]+(?:_[A-Za-z0-9]+)?', ' ', stripped)
+    # Be more aggressive in removing LaTeX structures before checking for words
+    prose_probe = re.sub(r'\\[A-Za-z]+(?:\{[^{}]*\}|\[[^\[\]]*\]|_[A-Za-z0-9]+|\^[A-Za-z0-9]+)*', ' ', stripped)
     prose_probe = re.sub(
         r'\b(?:exp|lambda|alpha|beta|gamma|delta|epsilon|phi|theta|omega|frac|sqrt|sin|cos|tan|log|ln|approx|cdot|partial)(?:_[A-Za-z0-9]+)?\b',
         ' ',
