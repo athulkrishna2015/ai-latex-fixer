@@ -23,14 +23,13 @@ def normalize_math_text(text: str) -> str:
     text = _normalize_overescaped_math_delimiters(text)
     text = _normalize_anki_mathjax_tags(text)
     
-    # Normalize unescaped [ ... ] and ( ... ) that look like math
-    text = _normalize_plain_math_delimiters(text)
-    
-    # Run this before dollar/mixed normalization so we don't double-process
-    text = _repair_standalone_commands(text)
-    
+    # Normalize delimiters first to protect math content
     text = _normalize_dollar_math_delimiters(text)
+    text = _normalize_plain_math_delimiters(text)
     text = _normalize_mixed_math_delimiters(text)
+    
+    # Now run standalone repairs on the remaining text
+    text = _repair_standalone_commands(text)
     
     # Standardize delimiters and fix inner LaTeX.
     # Updated to handle multiple slashes more robustly
@@ -73,27 +72,45 @@ def _index_in_ranges(index: int, ranges: List[Tuple[int, int]]) -> bool:
 def _normalize_dollar_math_delimiters(text: str) -> str:
     def convert_display(match):
         inner = match.group(1)
-        if _looks_like_math_span(inner):
-            return r'\[' + _fix_latex_span(inner) + r'\]'
-        return match.group(0)
+        # In the experiment, we trust $$...$$ more.
+        # We don't call _fix_latex_span here yet; we let the main loop handle it
+        # by just converting the delimiters.
+        return r'\[' + inner.strip() + r'\]'
 
     def convert_inline(match):
         inner = match.group(1)
-        if _looks_like_math_span(inner):
-            return r'\(' + _fix_latex_span(inner) + r'\)'
+        # Trust $...$ if it looks even remotely like math or is a single variable
+        # Fixed regex with double backslashes
+        if _looks_like_math_span(inner) or re.fullmatch(r'\s*[A-Za-z0-9\\theta\\alpha\\beta\\gamma\\delta\\epsilon\\phi\\omega\\mu\\pi\\rho\\sigma\\tau]\s*', inner):
+             return r'\(' + inner.strip() + r'\)'
         return match.group(0)
 
+    # Protect escaped dollars first
+    protected_escaped = []
+    def protect_escaped(match):
+        protected_escaped.append(match.group(0))
+        return f"@@AI_HINTS_ESCAPED_DOLLAR_{len(protected_escaped)-1}@@"
+    
+    text = re.sub(r'\\\$', protect_escaped, text)
+
     text = re.sub(
-        r'(?<!\\)\$\$(.*?)(?<!\\)\$\$',
+        r'\$\$(.*?)\$\$',
         convert_display,
         text,
         flags=re.DOTALL,
     )
-    return re.sub(
-        r'(?<!\\)\$(?!\$)([^\n$]{1,220})(?<!\\)\$(?!\$)',
+    
+    text = re.sub(
+        r'\$([^\$ \n][^\$]*?[^\$ \n]|[^\$ \n])\$',
         convert_inline,
         text,
     )
+
+    # Restore escaped dollars
+    for i, val in enumerate(protected_escaped):
+        text = text.replace(f"@@AI_HINTS_ESCAPED_DOLLAR_{i}@@", val)
+    
+    return text
 
 def _normalize_plain_math_delimiters(text: str) -> str:
     protected = _math_block_ranges(text)
