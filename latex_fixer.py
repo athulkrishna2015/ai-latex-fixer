@@ -394,6 +394,11 @@ def _fix_latex_span(span: str) -> str:
         protected.append(val)
         return f"@@AI_HINTS_LATEX_TEXT_{len(protected) - 1}@@"
 
+    # Repair common AI hallucinations where math commands are erroneously wrapped in \text{...}
+    span = re.sub(r'\\text\{\\?(sqrt|pi|sin|cos|tan|ln|log|exp|lambda|theta|alpha|beta|gamma|delta|epsilon|phi|omega|mu|nu|rho|sigma|tau|chi|psi|frac)\}', r'\\\1', span)
+    span = re.sub(r'\\text\{2pi\}', r'2\\pi', span)
+    span = re.sub(r'\\text\{2\\pi\}', r'2\\pi', span)
+
     # Protect \text{...}, \mathrm{...}, \operatorname{...}
     span = re.sub(
         r'\\(?:text|mathrm|operatorname)\{[^{}]*\}',
