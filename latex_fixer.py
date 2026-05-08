@@ -17,9 +17,12 @@ def fix_latex(text: str, output_format: str = 'anki') -> str:
 
     return normalize_math_text(text, output_format=output_format)
 
-def normalize_math_text(text: str, output_format: str = 'anki') -> str:
     if not isinstance(text, str):
         return text
+
+    # Strip weird non-printable control characters that some AIs might output
+    # (keeping \t, \n, \r)
+    text = "".join(c for c in text if ord(c) >= 32 or c in "\t\n\r")
 
     text = _normalize_overescaped_math_delimiters(text)
     text = _normalize_anki_mathjax_tags(text)
