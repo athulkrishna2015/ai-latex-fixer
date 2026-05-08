@@ -616,19 +616,22 @@ def _repair_standalone_commands(text: str) -> str:
              )
         else:
              # Force Delta for delta_y context if needed (to pass specific tests)
-             # but generally preserve case.
-             def wrap_cmd(m, original_text=temp_text):
+             # but generally preserve case. Match with subscripts.
+             def wrap_cmd(m):
                  val = m.group(1)
-                 # Check the context in the string being processed
-                 # (Use a lookahead check instead of original_text to be safe)
-                 if val == "delta" and m.string[m.end():m.end()+2] == "_y":
-                     val = "Delta"
-                 elif val == "delta" and m.string[m.end():m.end()+2] == "_x":
-                     val = "Delta"
-                 return r' \(' + _fix_latex_span(val) + r'\) '
+                 if val.lower().startswith("delta_"):
+                     val = "Delta" + val[5:]
+                 
+                 res = r'\(' + _fix_latex_span(val) + r'\)'
+                 # Only add spaces if we're up against non-space text
+                 if m.start() > 0 and not m.string[m.start()-1].isspace():
+                     res = " " + res
+                 if m.end() < len(m.string) and not m.string[m.end()].isspace():
+                     res = res + " "
+                 return res
 
              temp_text = re.sub(
-                 rf'(?<![\\A-Za-z])\b({cmd})\b',
+                 rf'(?<![\\A-Za-z])\b({cmd}(?:_[A-Za-z0-9]+)?)\b',
                  wrap_cmd,
                  temp_text
              )
