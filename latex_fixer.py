@@ -6,17 +6,12 @@ _MATH_BLOCK_RE = re.compile(
     flags=re.DOTALL | re.IGNORECASE,
 )
 
-def fix_latex(text: str, output_format: str = 'anki') -> str:
-    """
+def normalize_math_text(text: str, output_format: str = 'anki') -> str:
+    r"""
     The main entry point for the LaTeX fixer.
     Repairs common AI math errors like missing backslashes or joined commands.
     output_format can be 'anki' (default, uses \( and \[) or 'dollars' (uses $ and $$).
     """
-    if not isinstance(text, str):
-        return text
-
-    return normalize_math_text(text, output_format=output_format)
-
     if not isinstance(text, str):
         return text
 
@@ -32,11 +27,7 @@ def fix_latex(text: str, output_format: str = 'anki') -> str:
     text = _normalize_plain_math_delimiters(text)
     text = _normalize_mixed_math_delimiters(text)
     
-    # Now run standalone repairs on the remaining text
-    text = _repair_standalone_commands(text)
-    
-    # Standardize delimiters and fix inner LaTeX.
-    # Updated to handle multiple slashes more robustly
+    # Standardization of existing math blocks
     text = re.sub(
         r'\\+[\(\[](.*?)\\+[\)\]]',
         lambda m: (r'\(' if m.group(0).startswith(r'\(') or m.group(0).startswith('(') else r'\[') 
@@ -45,6 +36,9 @@ def fix_latex(text: str, output_format: str = 'anki') -> str:
         text,
         flags=re.DOTALL,
     )
+
+    # Now run standalone repairs on the remaining text
+    text = _repair_standalone_commands(text)
 
     if "<anki-mathjax" not in text.lower():
         if _should_wrap_standalone_math(text):
@@ -60,6 +54,8 @@ def fix_latex(text: str, output_format: str = 'anki') -> str:
         text = text.replace(r'\[', '$$').replace(r'\]', '$$')
 
     return text
+
+fix_latex = normalize_math_text
 
 def _normalize_overescaped_math_delimiters(text: str) -> str:
     return re.sub(r'\\\\([()\[\]])', lambda m: "\\" + m.group(1), text)
@@ -359,8 +355,12 @@ def _find_next_unescaped_close_bracket(text: str, start: int) -> int:
 
 def _fix_latex_span(span: str) -> str:
     """Repair LaTeX only inside text already identified as math."""
+    # Fix common AI hallucinations like \ninfty or \nsum
+    span = re.sub(r'\\n(infty|sum|prod|int|lim|frac|sqrt|alpha|beta|gamma|delta|epsilon|phi|theta|omega|mu|nu|pi|rho|sigma|tau|chi|psi)', r'\\\1', span)
+    
     commands = [
-        "exp", "lambda", "frac", "left", "right", "sin", "cos", "tan",
+        "exp", "lambda", "frac", "left", "right", "sin", "cos", "tan", "cosh", "sinh", "tanh",
+        "arcsin", "arccos", "arctan", "arccosh", "arcsinh", "arctanh",
         "sqrt", "log", "ln", "lim", "min", "max", "det", "dim", "ker",
         "approx", "cdot", "times", "div", "pm", "mp", "text", "mathrm",
         "operatorname", "partial", "nabla", "int", "iint", "iiint", "oint",
@@ -377,6 +377,7 @@ def _fix_latex_span(span: str) -> str:
         "abs", "bra", "ket", "braket", "norm", "matrix", "pmatrix", "bmatrix", "vmatrix", "Vmatrix",
         "binom", "cfrac", "coloneqq", "coloneq", "eqqcolon", "eqcolon",
         "grad", "div", "curl", "nabla", "perp", "parallel", "angle", "degree", "deg",
+        "mathbf", "boldsymbol", "mathbb", "mathcal", "mathit", "mathsf", "mathtt", "bold", "unit",
     ]
     functions = ["exp", "sin", "cos", "tan", "log", "ln", "lim"]
     command_alt = "|".join(re.escape(cmd) for cmd in commands)
@@ -386,9 +387,23 @@ def _fix_latex_span(span: str) -> str:
         protected.append(match.group(0))
         return f"@@AI_HINTS_LATEX_TEXT_{len(protected) - 1}@@"
 
+    def protect_begin_end(match):
+        val = match.group(0)
+        if not val.startswith('\\'):
+            val = '\\' + val
+        protected.append(val)
+        return f"@@AI_HINTS_LATEX_TEXT_{len(protected) - 1}@@"
+
+    # Protect \text{...}, \mathrm{...}, \operatorname{...}
     span = re.sub(
         r'\\(?:text|mathrm|operatorname)\{[^{}]*\}',
         protect_text_command,
+        span,
+    )
+    # Protect \begin{...} and \end{...} (backslash optional, ensure it exists)
+    span = re.sub(
+        r'\\?(?:begin|end)\{[^{}]*\}',
+        protect_begin_end,
         span,
     )
     span = _unwrap_math_delimiters_inside_span(span)
@@ -419,11 +434,11 @@ def _fix_latex_span(span: str) -> str:
     return span
 
 def _normalize_latex_operators(span: str) -> str:
-    span = re.sub(r'(?<!\\)<->', r'\\leftrightarrow ', span)
-    span = re.sub(r'(?<!\\)->', r'\\to ', span)
-    span = re.sub(r'(?<!\\)<=', r'\\le ', span)
-    span = re.sub(r'(?<!\\)>=', r'\\ge ', span)
-    return re.sub(r'(?<!\\)!=', r'\\ne ', span)
+    span = re.sub(r'(?<!\\)<->', r'\\leftrightarrow', span)
+    span = re.sub(r'(?<!\\)->', r'\\to', span)
+    span = re.sub(r'(?<!\\)<=', r'\\le', span)
+    span = re.sub(r'(?<!\\)>=', r'\\ge', span)
+    return re.sub(r'(?<!\\)!=', r'\\ne', span)
 
 def _normalize_parenthesized_scripts(span: str) -> str:
     result = []
@@ -451,8 +466,14 @@ def _looks_like_script_group(text: str) -> bool:
     return bool(re.search(r'[\\A-Za-z0-9+\-*/=^_{}<>]', stripped))
 
 def _unwrap_math_delimiters_inside_span(span: str) -> str:
-    span = re.sub(r'\\\((.*?)\\\)', lambda m: m.group(1).strip(), span, flags=re.DOTALL)
-    return re.sub(r'\\\[(.*?)\\\]', lambda m: m.group(1).strip(), span, flags=re.DOTALL)
+    # Recursively unwrap redundant delimiters like \( $ x $ \)
+    for _ in range(3):
+        span = re.sub(r'\\\(([\s\S]*?)\\\)', r'\1', span)
+        span = re.sub(r'\\\[([\s\S]*?)\\\]', r'\1', span)
+        span = re.sub(r'\$\$([\s\S]*?)\$\$', r'\1', span)
+        span = re.sub(r'\$([\s\S]*?)\$', r'\1', span)
+        span = span.strip()
+    return span
 
 def _wrap_parenthetical_math(text: str) -> str:
     parts = []
@@ -485,13 +506,19 @@ def _wrap_parenthetical_math_plain(text: str) -> str:
             continue
 
         inner = text[i + 1:end]
-        # Only wrap single letters if they are common math variables and NOT obviously prose labels
-        # Prose labels often appear at the start of a sentence or in a list like (a), (b), (i)
-        is_prose_label = re.fullmatch(r'\s*[a-zA-Z0-9ivx]+\s*', inner) and (i == 0 or text[i-1] in " .")
+        stripped_inner = inner.strip()
         
-        if _looks_like_math_span(inner) or (re.fullmatch(r'\s*[A-Za-z]\s*', inner) and not is_prose_label):
+        # Prose labels like (a), (b), (i) often appear at the start of a sentence or in a list.
+        # We try to distinguish them from math like (x) or (n).
+        # Labels are usually a single char in [a-e] or [i-v].
+        is_prose_label = (
+            re.fullmatch(r'[a-ei-v0-9]+', stripped_inner) 
+            and (i == 0 or text[i-1] in " .")
+        )
+        
+        if _looks_like_math_span(stripped_inner) or (re.fullmatch(r'[A-Za-z]', stripped_inner) and not is_prose_label):
             result.append(r'\(')
-            result.append(_fix_latex_span(inner))
+            result.append(_fix_latex_span(stripped_inner))
             result.append(r'\)')
         else:
             result.append(text[i:end + 1])
@@ -597,8 +624,9 @@ def _repair_standalone_commands(text: str) -> str:
         "lambda", "alpha", "beta", "gamma", "delta", "epsilon", "phi", "theta",
         "omega", "mu", "nu", "pi", "rho", "sigma", "tau", "chi", "psi",
         "Delta", "Gamma", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Phi", "Psi", "Omega",
-        "frac", "sqrt", "sin", "cos", "tan", "log", "ln", "sum", "int", "infty",
-        "abs", "bra", "ket", "braket", "grad", "nabla", "perp", "angle"
+        "frac", "sqrt", "sin", "cos", "tan", "cosh", "sinh", "tanh", "log", "ln", "sum", "int", "infty",
+        "abs", "bra", "ket", "braket", "grad", "nabla", "perp", "angle",
+        "vec", "hat", "bar", "dot", "ddot", "tilde", "mathbb", "mathcal", "mathfrak", "cdot"
     ]
     
     # Protect existing math blocks
@@ -612,30 +640,18 @@ def _repair_standalone_commands(text: str) -> str:
     # Standardize spacing for bare commands
     for cmd in commands:
         if cmd in ["frac", "sqrt", "sin", "cos", "tan", "log", "ln", "sum", "int", "abs", "norm"]:
+             def wrap_bare(m):
+                 return r'\(' + _fix_latex_span(m.group(1) + (m.group(2) or "") + m.group(3)) + r'\)'
+
              temp_text = re.sub(
                  rf'(?<![\\A-Za-z])\b({cmd})\b(\s*[_^](?:{{.*?}}|[^ \t\n\r\f\v]))?\s*({{.*?}}{{.*?}}|{{.*?}}|\[.*?\]|\(.*?\))',
-                 lambda m: r' \(' + _fix_latex_span(m.group(1) + (m.group(2) or "") + m.group(3)) + r'\) ',
+                 wrap_bare,
                  temp_text
              )
         else:
-             # Force Delta for delta_y context if needed (to pass specific tests)
-             # but generally preserve case. Match with subscripts.
-             def wrap_cmd(m):
-                 val = m.group(1)
-                 if val.lower().startswith("delta_"):
-                     val = "Delta" + val[5:]
-                 
-                 res = r'\(' + _fix_latex_span(val) + r'\)'
-                 # Only add spaces if we're up against non-space text
-                 if m.start() > 0 and not m.string[m.start()-1].isspace():
-                     res = " " + res
-                 if m.end() < len(m.string) and not m.string[m.end()].isspace():
-                     res = res + " "
-                 return res
-
              temp_text = re.sub(
-                 rf'(?<![\\A-Za-z])\b({cmd}(?:_[A-Za-z0-9]+)?)\b',
-                 wrap_cmd,
+                 rf'(?<![\\A-Za-z])\b({cmd}(?:_[A-Za-z0-9]+|{{[^{{}}]*}}|\[[^\[\]]*\])*)',
+                 lambda m: r'\(' + _fix_latex_span(m.group(1)) + r'\)',
                  temp_text
              )
 
