@@ -6,17 +6,18 @@ _MATH_BLOCK_RE = re.compile(
     flags=re.DOTALL | re.IGNORECASE,
 )
 
-def fix_latex(text: str) -> str:
+def fix_latex(text: str, output_format: str = 'anki') -> str:
     """
     The main entry point for the LaTeX fixer.
     Repairs common AI math errors like missing backslashes or joined commands.
+    output_format can be 'anki' (default, uses \( and \[) or 'dollars' (uses $ and $$).
     """
     if not isinstance(text, str):
         return text
 
-    return normalize_math_text(text)
+    return normalize_math_text(text, output_format=output_format)
 
-def normalize_math_text(text: str) -> str:
+def normalize_math_text(text: str, output_format: str = 'anki') -> str:
     if not isinstance(text, str):
         return text
 
@@ -49,6 +50,11 @@ def normalize_math_text(text: str) -> str:
         else:
             text = _wrap_parenthetical_math(text)
             text = _wrap_bare_math_tokens(text)
+
+    # Final conversion to requested format
+    if output_format == 'dollars':
+        text = text.replace(r'\(', '$').replace(r'\)', '$')
+        text = text.replace(r'\[', '$$').replace(r'\]', '$$')
 
     return text
 
