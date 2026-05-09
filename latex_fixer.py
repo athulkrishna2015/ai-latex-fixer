@@ -38,15 +38,17 @@ def normalize_math_text(text: str, output_format: str = 'anki') -> str:
     )
 
     # Now run standalone repairs on the remaining text
-    text = _repair_standalone_commands(text)
+    # text = _repair_standalone_commands(text)
 
-    if "<anki-mathjax" not in text.lower():
-        if _should_wrap_standalone_math(text):
-            inner = _unwrap_math_delimiters_inside_span(text.strip())
-            text = r'\(' + _fix_latex_span(inner) + r'\)'
-        else:
-            text = _wrap_parenthetical_math(text)
-            text = _wrap_bare_math_tokens(text)
+    # Note: We disable aggressive standalone wrapping to prevent turning plain 
+    # words like "Alpha" or "Delta" into LaTeX unnecessarily.
+    # if "<anki-mathjax" not in text.lower():
+    #     if _should_wrap_standalone_math(text):
+    #         inner = _unwrap_math_delimiters_inside_span(text.strip())
+    #         text = r'\(' + _fix_latex_span(inner) + r'\)'
+    #     else:
+    #         text = _wrap_parenthetical_math(text)
+    #         text = _wrap_bare_math_tokens(text)
 
     # Final conversion to requested format
     if output_format == 'dollars':
