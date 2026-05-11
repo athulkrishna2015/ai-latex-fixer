@@ -6,7 +6,7 @@ _MATH_BLOCK_RE = re.compile(
     flags=re.DOTALL | re.IGNORECASE,
 )
 
-def normalize_math_text(text: str, output_format: str = 'anki') -> str:
+def normalize_math_text(text: str, output_format: str = 'anki', fix_latex: bool = True) -> str:
     r"""
     The main entry point for the LaTeX fixer.
     Repairs common AI math errors like missing backslashes or joined commands.
@@ -20,33 +20,34 @@ def normalize_math_text(text: str, output_format: str = 'anki') -> str:
     text = "".join(c for c in text if ord(c) >= 32 or c in "\t\n\r")
 
     text = _normalize_overescaped_math_delimiters(text)
-    text = _normalize_anki_mathjax_tags(text)
+    text = _normalize_anki_mathjax_tags(text, fix_latex=fix_latex)
     
     # Normalize delimiters first to protect math content
-    text = _normalize_dollar_math_delimiters(text)
-    text = _normalize_plain_math_delimiters(text)
-    text = _normalize_mixed_math_delimiters(text)
+    text = _normalize_dollar_math_delimiters(text, fix_latex=fix_latex)
+    text = _normalize_plain_math_delimiters(text, fix_latex=fix_latex)
+    text = _normalize_mixed_math_delimiters(text, fix_latex=fix_latex)
     
     # Standardization of existing math blocks
     text = re.sub(
         r'\\+[\(\[](.*?)\\+[\)\]]',
         lambda m: (r'\(' if m.group(0).startswith(r'\(') or m.group(0).startswith('(') else r'\[') 
-                  + _fix_latex_span(m.group(1)) 
+                  + (_fix_latex_span(m.group(1)) if fix_latex else m.group(1)) 
                   + (r'\)' if m.group(0).startswith(r'\(') or m.group(0).startswith('(') else r'\]'),
         text,
         flags=re.DOTALL,
     )
 
-    # Now run standalone repairs on the remaining text
-    text = _repair_standalone_commands(text)
+    if fix_latex:
+        # Now run standalone repairs on the remaining text
+        text = _repair_standalone_commands(text)
 
-    if "<anki-mathjax" not in text.lower():
-        if _should_wrap_standalone_math(text):
-            inner = _unwrap_math_delimiters_inside_span(text.strip())
-            text = r'\(' + _fix_latex_span(inner) + r'\)'
-        else:
-            text = _wrap_parenthetical_math(text)
-            text = _wrap_bare_math_tokens(text)
+        if "<anki-mathjax" not in text.lower():
+            if _should_wrap_standalone_math(text):
+                inner = _unwrap_math_delimiters_inside_span(text.strip())
+                text = r'\(' + _fix_latex_span(inner) + r'\)'
+            else:
+                text = _wrap_parenthetical_math(text)
+                text = _wrap_bare_math_tokens(text)
 
     # Final conversion to requested format
     if output_format == 'dollars':
@@ -60,10 +61,10 @@ fix_latex = normalize_math_text
 def _normalize_overescaped_math_delimiters(text: str) -> str:
     return re.sub(r'\\\\([()\[\]])', lambda m: "\\" + m.group(1), text)
 
-def _normalize_anki_mathjax_tags(text: str) -> str:
+def _normalize_anki_mathjax_tags(text: str, fix_latex: bool = True) -> str:
     return re.sub(
         r'(<anki-mathjax\b[^>]*>)(.*?)(</anki-mathjax>)',
-        lambda m: m.group(1) + _fix_latex_span(m.group(2)) + m.group(3),
+        lambda m: m.group(1) + (_fix_latex_span(m.group(2)) if fix_latex else m.group(2)) + m.group(3),
         text,
         flags=re.DOTALL | re.IGNORECASE,
     )
@@ -74,7 +75,7 @@ def _math_block_ranges(text: str) -> List[Tuple[int, int]]:
 def _index_in_ranges(index: int, ranges: List[Tuple[int, int]]) -> bool:
     return any(start <= index < end for start, end in ranges)
 
-def _normalize_dollar_math_delimiters(text: str) -> str:
+def _normalize_dollar_math_delimiters(text: str, fix_latex: bool = True) -> str:
     def convert_display(match):
         inner = match.group(1)
         # In the experiment, we trust $$...$$ more.
@@ -117,14 +118,14 @@ def _normalize_dollar_math_delimiters(text: str) -> str:
     
     return text
 
-def _normalize_plain_math_delimiters(text: str) -> str:
+def _normalize_plain_math_delimiters(text: str, fix_latex: bool = True) -> str:
     protected = _math_block_ranges(text)
-    text = _normalize_plain_display_delimiters(text, protected)
+    text = _normalize_plain_display_delimiters(text, protected, fix_latex=fix_latex)
     protected = _math_block_ranges(text)
-    text = _normalize_plain_open_escaped_close(text, protected)
+    text = _normalize_plain_open_escaped_close(text, protected, fix_latex=fix_latex)
     return text
 
-def _normalize_plain_display_delimiters(text: str, protected_ranges: List[Tuple[int, int]] = None) -> str:
+def _normalize_plain_display_delimiters(text: str, protected_ranges: List[Tuple[int, int]] = None, fix_latex: bool = True) -> str:
     protected_ranges = protected_ranges or []
     result = []
     i = 0
@@ -153,7 +154,7 @@ def _normalize_plain_display_delimiters(text: str, protected_ranges: List[Tuple[
         inner = text[i + 1:close]
         if _looks_like_math_span(_unwrap_math_delimiters_inside_span(inner)):
             result.append(r'\[')
-            result.append(_fix_latex_span(inner))
+            result.append(_fix_latex_span(inner) if fix_latex else inner)
             result.append(r'\]')
             i = close + 1
         else:
@@ -161,15 +162,15 @@ def _normalize_plain_display_delimiters(text: str, protected_ranges: List[Tuple[
             i += 1
     return "".join(result)
 
-def _normalize_mixed_math_delimiters(text: str) -> str:
+def _normalize_mixed_math_delimiters(text: str, fix_latex: bool = True) -> str:
     protected = _math_block_ranges(text)
-    text = _normalize_plain_display_open_escaped_close(text, protected)
+    text = _normalize_plain_display_open_escaped_close(text, protected, fix_latex=fix_latex)
     protected = _math_block_ranges(text)
-    text = _normalize_plain_open_escaped_close(text, protected)
-    text = _normalize_escaped_display_open_plain_close(text)
-    return _normalize_escaped_open_plain_close(text)
+    text = _normalize_plain_open_escaped_close(text, protected, fix_latex=fix_latex)
+    text = _normalize_escaped_display_open_plain_close(text, fix_latex=fix_latex)
+    return _normalize_escaped_open_plain_close(text, fix_latex=fix_latex)
 
-def _normalize_plain_display_open_escaped_close(text: str, protected_ranges: List[Tuple[int, int]] = None) -> str:
+def _normalize_plain_display_open_escaped_close(text: str, protected_ranges: List[Tuple[int, int]] = None, fix_latex: bool = True) -> str:
     protected_ranges = protected_ranges or []
     result = []
     i = 0
@@ -197,7 +198,7 @@ def _normalize_plain_display_open_escaped_close(text: str, protected_ranges: Lis
         inner = text[i + 1:close]
         if _looks_like_math_span(_unwrap_math_delimiters_inside_span(inner)):
             result.append(r'\[')
-            result.append(_fix_latex_span(inner))
+            result.append(_fix_latex_span(inner) if fix_latex else inner)
             result.append(r'\]')
             i = close + 2
         else:
@@ -205,7 +206,7 @@ def _normalize_plain_display_open_escaped_close(text: str, protected_ranges: Lis
             i += 1
     return "".join(result)
 
-def _normalize_escaped_display_open_plain_close(text: str) -> str:
+def _normalize_escaped_display_open_plain_close(text: str, fix_latex: bool = True) -> str:
     result = []
     i = 0
     while i < len(text):
@@ -228,7 +229,7 @@ def _normalize_escaped_display_open_plain_close(text: str) -> str:
         inner = text[i + 2:close]
         if _looks_like_math_span(_unwrap_math_delimiters_inside_span(inner)):
             result.append(r'\[')
-            result.append(_fix_latex_span(inner))
+            result.append(_fix_latex_span(inner) if fix_latex else inner)
             result.append(r'\]')
             i = close + 1
         else:
@@ -236,7 +237,7 @@ def _normalize_escaped_display_open_plain_close(text: str) -> str:
             i += 1
     return "".join(result)
 
-def _normalize_plain_open_escaped_close(text: str, protected_ranges: List[Tuple[int, int]] = None) -> str:
+def _normalize_plain_open_escaped_close(text: str, protected_ranges: List[Tuple[int, int]] = None, fix_latex: bool = True) -> str:
     protected_ranges = protected_ranges or []
     result = []
     i = 0
@@ -264,7 +265,7 @@ def _normalize_plain_open_escaped_close(text: str, protected_ranges: List[Tuple[
         inner = text[i + 1:close]
         if _looks_like_math_span(_unwrap_math_delimiters_inside_span(inner)):
             result.append(r'\(')
-            result.append(_fix_latex_span(inner))
+            result.append(_fix_latex_span(inner) if fix_latex else inner)
             result.append(r'\)')
             i = close + 2
         else:
@@ -272,7 +273,7 @@ def _normalize_plain_open_escaped_close(text: str, protected_ranges: List[Tuple[
             i += 1
     return "".join(result)
 
-def _normalize_escaped_open_plain_close(text: str) -> str:
+def _normalize_escaped_open_plain_close(text: str, fix_latex: bool = True) -> str:
     result = []
     i = 0
     while i < len(text):
@@ -295,7 +296,7 @@ def _normalize_escaped_open_plain_close(text: str) -> str:
         inner = text[i + 2:close]
         if _looks_like_math_span(_unwrap_math_delimiters_inside_span(inner)):
             result.append(r'\(')
-            result.append(_fix_latex_span(inner))
+            result.append(_fix_latex_span(inner) if fix_latex else inner)
             result.append(r'\)')
             i = close + 1
         else:
@@ -660,7 +661,7 @@ def _repair_standalone_commands(text: str) -> str:
              )
         else:
              temp_text = re.sub(
-                 rf'(?<![\\A-Za-z])\b({cmd}(?:_[A-Za-z0-9]+|{{[^{{}}]*}}|\[[^\[\]]*\])*)',
+                 rf'(?<![\\A-Za-z])\b({cmd}(?![A-Za-z])(?:_[A-Za-z0-9]+|{{[^{{}}]*}}|\[[^\[\]]*\])*)',
                  lambda m: r'\(' + _fix_latex_span(m.group(1)) + r'\)',
                  temp_text
              )
