@@ -41,13 +41,13 @@ def normalize_math_text(text: str, output_format: str = 'anki', fix_latex: bool 
         # Now run standalone repairs on the remaining text
         text = _repair_standalone_commands(text)
 
-        if "<anki-mathjax" not in text.lower():
-            if _should_wrap_standalone_math(text):
-                inner = _unwrap_math_delimiters_inside_span(text.strip())
-                text = r'\(' + _fix_latex_span(inner) + r'\)'
-            else:
-                text = _wrap_parenthetical_math(text)
-                text = _wrap_bare_math_tokens(text)
+    if "<anki-mathjax" not in text.lower():
+        if _should_wrap_standalone_math(text):
+            inner = _unwrap_math_delimiters_inside_span(text.strip())
+            text = r'\(' + (_fix_latex_span(inner) if fix_latex else inner) + r'\)'
+        elif fix_latex:
+            text = _wrap_parenthetical_math(text)
+            text = _wrap_bare_math_tokens(text)
 
     # Final conversion to requested format
     if output_format == 'dollars':
@@ -627,6 +627,12 @@ def _should_wrap_standalone_math(text: str) -> bool:
     )
     prose_probe = re.sub(r'\b[A-Za-z]\b', ' ', prose_probe)
     prose_words = re.findall(r'\b[A-Za-z]{2,}\b', prose_probe)
+    
+    # Allow up to 2 very short potential words (likely variable pairs like Nk, ma, PV)
+    # if the string contains strong mathematical indicators like '=' or '\\'
+    if len(prose_words) <= 2 and all(len(w) <= 3 for w in prose_words) and re.search(r'[=\\]', stripped):
+        return True
+
     return len(prose_words) == 0
 
 def _repair_standalone_commands(text: str) -> str:
