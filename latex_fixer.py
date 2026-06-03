@@ -601,7 +601,7 @@ def _should_wrap_standalone_math(text: str) -> bool:
     stripped = text.strip()
     if (
         not stripped
-        or len(stripped) > 200
+        or len(stripped) > 1000
         or not _looks_like_math_span(stripped)
     ):
         return False
