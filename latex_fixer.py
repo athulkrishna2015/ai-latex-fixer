@@ -6,7 +6,7 @@ _MATH_BLOCK_RE = re.compile(
     flags=re.DOTALL | re.IGNORECASE,
 )
 
-def normalize_math_text(text: str, output_format: str = 'anki', fix_latex: bool = True) -> str:
+def normalize_math_text(text: str, output_format: str = 'anki', fix_latex: bool = False) -> str:
     r"""
     The main entry point for the LaTeX fixer.
     Repairs common AI math errors like missing backslashes or joined commands.
@@ -61,7 +61,7 @@ fix_latex = normalize_math_text
 def _normalize_overescaped_math_delimiters(text: str) -> str:
     return re.sub(r'\\\\([()\[\]])', lambda m: "\\" + m.group(1), text)
 
-def _normalize_anki_mathjax_tags(text: str, fix_latex: bool = True) -> str:
+def _normalize_anki_mathjax_tags(text: str, fix_latex: bool = False) -> str:
     return re.sub(
         r'(<anki-mathjax\b[^>]*>)(.*?)(</anki-mathjax>)',
         lambda m: m.group(1) + (_fix_latex_span(m.group(2)) if fix_latex else m.group(2)) + m.group(3),
@@ -75,7 +75,7 @@ def _math_block_ranges(text: str) -> List[Tuple[int, int]]:
 def _index_in_ranges(index: int, ranges: List[Tuple[int, int]]) -> bool:
     return any(start <= index < end for start, end in ranges)
 
-def _normalize_dollar_math_delimiters(text: str, fix_latex: bool = True) -> str:
+def _normalize_dollar_math_delimiters(text: str, fix_latex: bool = False) -> str:
     def convert_display(match):
         inner = match.group(1)
         # In the experiment, we trust $$...$$ more.
@@ -118,14 +118,14 @@ def _normalize_dollar_math_delimiters(text: str, fix_latex: bool = True) -> str:
     
     return text
 
-def _normalize_plain_math_delimiters(text: str, fix_latex: bool = True) -> str:
+def _normalize_plain_math_delimiters(text: str, fix_latex: bool = False) -> str:
     protected = _math_block_ranges(text)
     text = _normalize_plain_display_delimiters(text, protected, fix_latex=fix_latex)
     protected = _math_block_ranges(text)
     text = _normalize_plain_open_escaped_close(text, protected, fix_latex=fix_latex)
     return text
 
-def _normalize_plain_display_delimiters(text: str, protected_ranges: List[Tuple[int, int]] = None, fix_latex: bool = True) -> str:
+def _normalize_plain_display_delimiters(text: str, protected_ranges: List[Tuple[int, int]] = None, fix_latex: bool = False) -> str:
     protected_ranges = protected_ranges or []
     result = []
     i = 0
@@ -162,7 +162,7 @@ def _normalize_plain_display_delimiters(text: str, protected_ranges: List[Tuple[
             i += 1
     return "".join(result)
 
-def _normalize_mixed_math_delimiters(text: str, fix_latex: bool = True) -> str:
+def _normalize_mixed_math_delimiters(text: str, fix_latex: bool = False) -> str:
     protected = _math_block_ranges(text)
     text = _normalize_plain_display_open_escaped_close(text, protected, fix_latex=fix_latex)
     protected = _math_block_ranges(text)
@@ -170,7 +170,7 @@ def _normalize_mixed_math_delimiters(text: str, fix_latex: bool = True) -> str:
     text = _normalize_escaped_display_open_plain_close(text, fix_latex=fix_latex)
     return _normalize_escaped_open_plain_close(text, fix_latex=fix_latex)
 
-def _normalize_plain_display_open_escaped_close(text: str, protected_ranges: List[Tuple[int, int]] = None, fix_latex: bool = True) -> str:
+def _normalize_plain_display_open_escaped_close(text: str, protected_ranges: List[Tuple[int, int]] = None, fix_latex: bool = False) -> str:
     protected_ranges = protected_ranges or []
     result = []
     i = 0
@@ -206,7 +206,7 @@ def _normalize_plain_display_open_escaped_close(text: str, protected_ranges: Lis
             i += 1
     return "".join(result)
 
-def _normalize_escaped_display_open_plain_close(text: str, fix_latex: bool = True) -> str:
+def _normalize_escaped_display_open_plain_close(text: str, fix_latex: bool = False) -> str:
     result = []
     i = 0
     while i < len(text):
@@ -237,7 +237,7 @@ def _normalize_escaped_display_open_plain_close(text: str, fix_latex: bool = Tru
             i += 1
     return "".join(result)
 
-def _normalize_plain_open_escaped_close(text: str, protected_ranges: List[Tuple[int, int]] = None, fix_latex: bool = True) -> str:
+def _normalize_plain_open_escaped_close(text: str, protected_ranges: List[Tuple[int, int]] = None, fix_latex: bool = False) -> str:
     protected_ranges = protected_ranges or []
     result = []
     i = 0
@@ -273,7 +273,7 @@ def _normalize_plain_open_escaped_close(text: str, protected_ranges: List[Tuple[
             i += 1
     return "".join(result)
 
-def _normalize_escaped_open_plain_close(text: str, fix_latex: bool = True) -> str:
+def _normalize_escaped_open_plain_close(text: str, fix_latex: bool = False) -> str:
     result = []
     i = 0
     while i < len(text):
@@ -591,11 +591,22 @@ def _looks_like_math_span(text: str) -> bool:
     stripped = text.strip()
     if not stripped or len(stripped) > 220:
         return False
+    
+    # If it contains non-Latin language characters, it must have a backslash 
+    # (indicating a LaTeX command) to be considered math.
+    if _contains_heavy_language_chars(stripped) and "\\" not in stripped:
+        return False
+
     return bool(
         re.search(r'[\\_=^{}]', stripped)
         or re.search(r'\b[A-Za-z]+\s*\([^)]*\)', stripped)
         or re.search(r'[+\-*/=<>~]', stripped) # Added operators
     )
+
+def _contains_heavy_language_chars(text: str) -> bool:
+    """Detects characters from scripts that are definitely not math (Indic, Arabic, CJK, etc.)."""
+    # Range includes Arabic, Indic (Malayalam, Hindi, etc.), CJK blocks
+    return bool(re.search(r'[\u0600-\u0DFF\u3040-\uA4CF\uAC00-\uD7AF\uF900-\uFAFF\uFE30-\uFE4F]', text))
 
 def _should_wrap_standalone_math(text: str) -> bool:
     stripped = text.strip()
@@ -606,6 +617,12 @@ def _should_wrap_standalone_math(text: str) -> bool:
     ):
         return False
     
+    # If it contains non-Latin language characters, we should NEVER wrap 
+    # the entire string in math delimiters. Individual parts might have been 
+    # wrapped by _repair_standalone_commands already.
+    if _contains_heavy_language_chars(stripped):
+        return False
+
     # If it's ALREADY fully wrapped, don't wrap again
     if re.match(r'^\\+[\(\[]', stripped) and re.search(r'\\+[\)\]]$', stripped):
         return False
@@ -625,8 +642,10 @@ def _should_wrap_standalone_math(text: str) -> bool:
         prose_probe,
         flags=re.IGNORECASE,
     )
-    prose_probe = re.sub(r'\b[A-Za-z]\b', ' ', prose_probe)
-    prose_words = re.findall(r'\b[A-Za-z]{2,}\b', prose_probe)
+    # Use Unicode-aware word character matching (excluding digits and underscore)
+    # Avoid \b as it can be unreliable with some Unicode scripts and combining marks
+    prose_probe = re.sub(r'(?<![A-Za-z])[A-Za-z](?![A-Za-z])', ' ', prose_probe)
+    prose_words = re.findall(r'[^\W0-9_]{2,}', prose_probe)
     
     # Allow up to 2 very short potential words (likely variable pairs like Nk, ma, PV)
     # if the string contains strong mathematical indicators like '=' or '\\'
