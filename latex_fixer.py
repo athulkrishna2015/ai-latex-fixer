@@ -15,6 +15,8 @@ def normalize_math_text(text: str, output_format: str = 'anki', fix_latex: bool 
     if not isinstance(text, str):
         return text
 
+    text = repair_latex_control_chars(text)
+
     # Strip weird non-printable control characters that some AIs might output
     # (keeping \t, \n, \r)
     text = "".join(c for c in text if ord(c) >= 32 or c in "\t\n\r")
@@ -711,3 +713,24 @@ def _repair_standalone_commands(text: str) -> str:
         temp_text = temp_text.replace(f"@@AI_HINTS_PROTECTED_{i}@@", val)
         
     return temp_text
+
+
+def repair_latex_control_chars(text: str) -> str:
+    if not isinstance(text, str):
+        return text
+    
+    # Map control characters followed by the remaining part of command names back to backslash + char
+    # e.g., \n (newline) followed by 'eq' (for \neq) -> \neq
+    replacements = [
+        ('\n', 'n', ['eq', 'e', 'u', 'otin', 'abla', 'sim', 'approx', 'eg', 'i', 'ormalsize']),
+        ('\t', 't', ['heta', 'au', 'imes', 'ilde', 'o', 'ext', 'an', 'anh', 'frac', 'riangle']),
+        ('\r', 'r', ['ho', 'ight', 'ightarrow', 'brace', 'angle', 'eal', 'ef']),
+        ('\x0c', 'f', ['rac', 'orall', 'lat']),
+        ('\x08', 'b', ['eta', 'egin', 'ar', 'matrix', 'inom', 'old', 'ackslash'])
+    ]
+    
+    for char, replacement_letter, suffixes in replacements:
+        pattern = rf'{re.escape(char)}(?=(?:{"|".join(suffixes)})(?![a-zA-Z]))'
+        text = re.sub(pattern, rf'\\{replacement_letter}', text)
+        
+    return text
