@@ -18,8 +18,8 @@ def normalize_math_text(text: str, output_format: str = 'anki', fix_latex: bool 
     text = repair_latex_control_chars(text)
 
     # Strip weird non-printable control characters that some AIs might output
-    # (keeping \t, \n, \r)
-    text = "".join(c for c in text if ord(c) >= 32 or c in "\t\n\r")
+    # (keeping \t, \n, \r and zero-width joiners/spaces needed for Indic scripts)
+    text = "".join(c for c in text if ord(c) >= 32 or c in "\t\n\r" or 0x200B <= ord(c) <= 0x200D)
 
     text = _normalize_overescaped_math_delimiters(text)
     text = _normalize_anki_mathjax_tags(text, fix_latex=fix_latex)
