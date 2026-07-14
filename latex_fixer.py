@@ -51,6 +51,13 @@ def normalize_math_text(text: str, output_format: str = 'anki', fix_latex: bool 
             text = _wrap_parenthetical_math(text)
             text = _wrap_bare_math_tokens(text)
 
+    if fix_latex:
+        # Wrap raw LaTeX commands (like \int or \frac) that are missing math delimiters
+        try:
+            text = _wrap_raw_backslashed_commands(text)
+        except Exception:
+            pass
+
     # Final conversion to requested format
     if output_format == 'dollars':
         text = text.replace(r'\(', '$').replace(r'\)', '$')
@@ -734,3 +741,54 @@ def repair_latex_control_chars(text: str) -> str:
         text = re.sub(pattern, rf'\\{replacement_letter}', text)
         
     return text
+
+
+def _wrap_raw_backslashed_commands(val: str) -> str:
+    """Finds segments containing backslash commands and wraps them in \( ... \) if they are not already in a math block."""
+    if not isinstance(val, str) or '\\' not in val:
+        return val
+
+    # 1. Protect existing math blocks
+    protected = []
+    def protect(match):
+        protected.append(match.group(0))
+        return f"@@AI_HINTS_PROTECTED_{len(protected)-1}@@"
+    
+    temp = _MATH_BLOCK_RE.sub(protect, val)
+    
+    # 2. Split by prose/punctuation delimiters to separate formulas from text
+    # Avoid splitting on escaped delimiters (e.g., '\,' or '\;' or '\:')
+    split_pat = re.compile(r'(?<!\\)(;|:|\band\b|\bor\b|,|\bvs\b)')
+    parts = split_pat.split(temp)
+    
+    for i, part in enumerate(parts):
+        if i % 2 == 1:
+            continue
+            
+        if '\\' in part:
+            stripped = part.strip()
+            # Clean LaTeX commands to count prose words
+            clean_prose = re.sub(r'\\[a-zA-Z,]+', ' ', stripped)
+            words = re.findall(r'[a-zA-Z]{4,}', clean_prose)
+            
+            math_prose = {'const', 'constant', 'with', 'where', 'for', 'lim', 'max', 'min', 'log', 'ln', 'exp'}
+            prose_words = [w for w in words if w.lower() not in math_prose]
+            
+            if not prose_words:
+                parts[i] = part.replace(stripped, rf'\({stripped}\)')
+            else:
+                def wrap_sub(m):
+                    return rf'\({m.group(0).strip()}\)'
+                
+                # Math formula pattern containing a backslash command
+                formula_pat = r'((?:[a-zA-Z0-9_]\s*[=<>+\-*/]*\s*)?\\[a-zA-Z,]+(?:[a-zA-Z0-9\s+*/=<>\(\)\{\}\[\]._^\-\\]|(?<![a-zA-Z])[a-zA-Z](?![a-zA-Z]))*)'
+                parts[i] = re.sub(formula_pat, wrap_sub, part)
+                
+    temp = "".join(parts)
+    
+    # 3. Restore protected math blocks
+    for idx, orig in enumerate(protected):
+        temp = temp.replace(f"@@AI_HINTS_PROTECTED_{idx}@@", orig)
+        
+    return temp
+
