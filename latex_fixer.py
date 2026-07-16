@@ -217,10 +217,17 @@ def _normalize_plain_display_delimiters(text: str, protected_ranges: List[Tuple[
 
         inner = text[i + 1:close]
         if _looks_like_math_span(_unwrap_math_delimiters_inside_span(inner)):
-            result.append(r'\[')
-            result.append(_fix_latex_span(inner) if fix_latex else inner)
-            result.append(r'\]')
-            i = close + 1
+            relation_ops = ['=', '<', '>', r'\le', r'\ge', r'\to', r'\leftrightarrow', r'\approx', r'\sim', r'\equiv', r'\propto', r'\neq']
+            is_commutator = ',' in inner and not any(op in inner for op in relation_ops)
+            
+            if not is_commutator:
+                result.append(r'\[')
+                result.append(_fix_latex_span(inner) if fix_latex else inner)
+                result.append(r'\]')
+                i = close + 1
+            else:
+                result.append(text[i])
+                i += 1
         else:
             result.append(text[i])
             i += 1
