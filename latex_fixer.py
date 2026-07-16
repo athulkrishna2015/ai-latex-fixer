@@ -6,6 +6,45 @@ _MATH_BLOCK_RE = re.compile(
     flags=re.DOTALL | re.IGNORECASE,
 )
 
+def contains_prose(math_content: str) -> bool:
+    temp = math_content
+    for _ in range(3):
+        temp = re.sub(r'\\(?:text|mathrm|operatorname|mathbf|mathsf|mathtt)\{[^{}]*\}', ' ', temp)
+    
+    for _ in range(3):
+        temp = re.sub(r'_[{][^{}]*[}]', ' ', temp)
+        temp = re.sub(r'\^[{][^{}]*[}]', ' ', temp)
+    temp = re.sub(r'_[A-Za-z0-9]+', ' ', temp)
+    temp = re.sub(r'\^[A-Za-z0-9]+', ' ', temp)
+    
+    temp = re.sub(r'\\[A-Za-z]+', ' ', temp)
+    
+    functions = r'\b(?:exp|sin|cos|tan|log|ln|lim|min|max|sum|int|prod|approx|cdot|div|times|to|ge|le|geq|leq|ne|neq|begin|end|matrix|pmatrix|cases|bmatrix|vmatrix|Vmatrix|array)\b'
+    temp = re.sub(functions, ' ', temp, flags=re.IGNORECASE)
+    
+    temp = re.sub(r'(?<![A-Za-z])[A-Za-z](?![A-Za-z])', ' ', temp)
+    
+    words = re.findall(r'[A-Za-z]{2,}', temp)
+    return len(words) > 0
+
+def unwrap_prose_math_blocks(text: str) -> str:
+    pattern = re.compile(r'(\\\((.*?)\\\)|\\\[(.*?)\\\])', re.DOTALL)
+    
+    def replace_match(match):
+        full_block = match.group(1)
+        is_display = full_block.startswith(r'\[')
+        content = match.group(3) if is_display else match.group(2)
+        
+        if contains_prose(content):
+            content = re.sub(r'\\in\b', 'in', content)
+            if is_display:
+                return f"[{content}]"
+            else:
+                return f"({content})"
+        return full_block
+
+    return pattern.sub(replace_match, text)
+
 def normalize_math_text(text: str, output_format: str = 'anki', fix_latex: bool = False) -> str:
     r"""
     The main entry point for the LaTeX fixer.
@@ -14,6 +53,9 @@ def normalize_math_text(text: str, output_format: str = 'anki', fix_latex: bool 
     """
     if not isinstance(text, str):
         return text
+
+    if fix_latex:
+        text = unwrap_prose_math_blocks(text)
 
     text = repair_latex_control_chars(text)
 
@@ -43,6 +85,12 @@ def normalize_math_text(text: str, output_format: str = 'anki', fix_latex: bool 
         # Now run standalone repairs on the remaining text
         text = _repair_standalone_commands(text)
 
+        # Wrap raw LaTeX commands (like \int or \frac) that are missing math delimiters
+        try:
+            text = _wrap_raw_backslashed_commands(text)
+        except Exception:
+            pass
+
     if "<anki-mathjax" not in text.lower():
         if _should_wrap_standalone_math(text):
             inner = _unwrap_math_delimiters_inside_span(text.strip())
@@ -51,12 +99,19 @@ def normalize_math_text(text: str, output_format: str = 'anki', fix_latex: bool 
             text = _wrap_parenthetical_math(text)
             text = _wrap_bare_math_tokens(text)
 
-    if fix_latex:
-        # Wrap raw LaTeX commands (like \int or \frac) that are missing math delimiters
-        try:
-            text = _wrap_raw_backslashed_commands(text)
-        except Exception:
-            pass
+    # Final standardization of existing math blocks (and clean any nested math delimiters)
+    text = re.sub(
+        r'\\+[\(\[](.*?)\\+[\)\]]',
+        lambda m: (r'\(' if m.group(0).startswith(r'\(') or m.group(0).startswith('(') else r'\[') 
+                  + (_fix_latex_span(m.group(1)) if fix_latex else m.group(1)) 
+                  + (r'\)' if m.group(0).startswith(r'\(') or m.group(0).startswith('(') else r'\]'),
+        text,
+        flags=re.DOTALL,
+    )
+
+    # Merge adjacent inline math blocks
+    for _ in range(5):
+        text = re.sub(r'\\\)\s*\\\([ \t]*', lambda m: ' ' if ' ' in m.group(0) or '\t' in m.group(0) else '', text)
 
     # Final conversion to requested format
     if output_format == 'dollars':
@@ -366,7 +421,7 @@ def _find_next_unescaped_close_bracket(text: str, start: int) -> int:
 def _fix_latex_span(span: str) -> str:
     """Repair LaTeX only inside text already identified as math."""
     # Fix common AI hallucinations like \ninfty or \nsum
-    span = re.sub(r'\\n(infty|sum|prod|int|lim|frac|sqrt|alpha|beta|gamma|delta|epsilon|phi|theta|omega|mu|nu|pi|rho|sigma|tau|chi|psi)', r'\\\1', span)
+    span = re.sub(r'\\n(infty|sum|prod|int|lim|frac|sqrt|alpha|beta|gamma|delta|epsilon|phi|theta|omega|mu|nu|pi|rho|sigma|tau|chi|psi|kappa)', r'\\\1', span)
     
     commands = [
         "exp", "lambda", "frac", "left", "right", "sin", "cos", "tan", "cosh", "sinh", "tanh",
@@ -381,7 +436,7 @@ def _fix_latex_span(span: str) -> str:
         "vec", "hat", "bar", "overline", "underline", "dot", "ddot",
         "tilde", "widehat", "widetilde", "begin", "end",
         "alpha", "beta", "gamma", "delta", "epsilon", "phi", "theta",
-        "omega", "mu", "nu", "pi", "rho", "sigma", "tau", "chi", "psi",
+        "omega", "mu", "nu", "pi", "rho", "sigma", "tau", "chi", "psi", "kappa",
         "Delta", "Gamma", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Phi", "Psi", "Omega",
         "varepsilon", "vartheta", "varkappa", "varpi", "varrho", "varsigma", "varphi",
         "abs", "bra", "ket", "braket", "norm", "matrix", "pmatrix", "bmatrix", "vmatrix", "Vmatrix",
@@ -537,7 +592,7 @@ def _wrap_parenthetical_math_plain(text: str) -> str:
         
         if _looks_like_math_span(stripped_inner) or (re.fullmatch(r'[A-Za-z]', stripped_inner) and not is_prose_label):
             result.append(r'\(')
-            result.append(_fix_latex_span(stripped_inner))
+            result.append(f"({_fix_latex_span(stripped_inner)})")
             result.append(r'\)')
         else:
             result.append(text[i:end + 1])
@@ -556,6 +611,13 @@ def _wrap_bare_math_tokens(text: str) -> str:
 
 def _wrap_bare_math_tokens_plain(text: str) -> str:
     greek = "lambda|alpha|beta|gamma|delta|epsilon|phi|theta|omega"
+
+    # Wrap subscripts/superscripts with braces or bare digits, e.g., Y_{l}^{m}, x_i^2, x^{2}
+    text = re.sub(
+        r'(?<![\\A-Za-z0-9])([A-Za-z](?:_[{][^{}]*[}]|_[A-Za-z0-9]+|\^[{][^{}]*[}]|\^[A-Za-z0-9]+)+)(?![A-Za-z0-9])',
+        lambda m: r'\(' + _fix_latex_span(m.group(1)) + r'\)',
+        text,
+    )
 
     text = re.sub(
         r'(?<![\\A-Za-z0-9])([A-Za-z])\(([A-Za-z0-9_,+\-*/^ ]{1,40})\)',
@@ -606,11 +668,15 @@ def _looks_like_math_span(text: str) -> bool:
     if _contains_heavy_language_chars(stripped) and "\\" not in stripped:
         return False
 
-    return bool(
+    is_math = bool(
         re.search(r'[\\_=^{}]', stripped)
         or re.search(r'\b[A-Za-z]+\s*\([^)]*\)', stripped)
         or re.search(r'[+\-*/=<>~]', stripped) # Added operators
     )
+    if not is_math:
+        return False
+
+    return not contains_prose(stripped)
 
 def _contains_heavy_language_chars(text: str) -> bool:
     """Detects characters from scripts that are definitely not math (Indic, Arabic, CJK, etc.)."""
@@ -644,7 +710,14 @@ def _should_wrap_standalone_math(text: str) -> bool:
 
     # Don't wrap if there's more than one potential word (prose)
     # Be more aggressive in removing LaTeX structures before checking for words
-    prose_probe = re.sub(r'\\[A-Za-z]+(?:\{[^{}]*\}|\[[^\[\]]*\]|_[A-Za-z0-9]+|\^[A-Za-z0-9]+)*', ' ', stripped)
+    prose_probe = stripped
+    for _ in range(3):
+        prose_probe = re.sub(r'_[{][^{}]*[}]', ' ', prose_probe)
+        prose_probe = re.sub(r'\^[{][^{}]*[}]', ' ', prose_probe)
+    prose_probe = re.sub(r'_[A-Za-z0-9]+', ' ', prose_probe)
+    prose_probe = re.sub(r'\^[A-Za-z0-9]+', ' ', prose_probe)
+
+    prose_probe = re.sub(r'\\[A-Za-z]+(?:\{[^{}]*\}|\[[^\[\]]*\]|_[A-Za-z0-9]+|\^[A-Za-z0-9]+)*', ' ', prose_probe)
     prose_probe = re.sub(
         r'\b(?:exp|lambda|alpha|beta|gamma|delta|epsilon|phi|theta|omega|frac|sqrt|sin|cos|tan|log|ln|approx|cdot|partial)(?:_[A-Za-z0-9]+)?\b',
         ' ',
@@ -667,7 +740,7 @@ def _repair_standalone_commands(text: str) -> str:
     """Finds bare commands like 'lambda' or 'frac{1}{2}' in text and wraps/fixes them."""
     commands = [
         "lambda", "alpha", "beta", "gamma", "delta", "epsilon", "phi", "theta",
-        "omega", "mu", "nu", "pi", "rho", "sigma", "tau", "chi", "psi",
+        "omega", "mu", "nu", "pi", "rho", "sigma", "tau", "chi", "psi", "kappa",
         "Delta", "Gamma", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Phi", "Psi", "Omega",
         "frac", "sqrt", "sin", "cos", "tan", "cosh", "sinh", "tanh", "log", "ln", "sum", "int", "infty",
         "abs", "bra", "ket", "braket", "grad", "nabla", "perp", "angle",
@@ -758,7 +831,7 @@ def _wrap_raw_backslashed_commands(val: str) -> str:
     
     # 2. Split by prose/punctuation delimiters to separate formulas from text
     # Avoid splitting on escaped delimiters (e.g., '\,' or '\;' or '\:')
-    split_pat = re.compile(r'(?<!\\)(;|:|\band\b|\bor\b|,|\bvs\b)')
+    split_pat = re.compile(r'(?<!\\)(;|:|\band\b|\bor\b|\bvs\b)')
     parts = split_pat.split(temp)
     
     for i, part in enumerate(parts):
@@ -769,6 +842,8 @@ def _wrap_raw_backslashed_commands(val: str) -> str:
             stripped = part.strip()
             # Clean LaTeX commands to count prose words
             clean_prose = re.sub(r'\\[a-zA-Z,]+', ' ', stripped)
+            # Remove protection placeholders to avoid falsely counting them as prose words
+            clean_prose = re.sub(r'@@AI_HINTS_PROTECTED_\d+@@', ' ', clean_prose)
             words = re.findall(r'[a-zA-Z]{4,}', clean_prose)
             
             math_prose = {'const', 'constant', 'with', 'where', 'for', 'lim', 'max', 'min', 'log', 'ln', 'exp'}
@@ -778,10 +853,28 @@ def _wrap_raw_backslashed_commands(val: str) -> str:
                 parts[i] = part.replace(stripped, rf'\({stripped}\)')
             else:
                 def wrap_sub(m):
-                    return rf'\({m.group(0).strip()}\)'
+                    content = m.group(0)
+                    stripped_suffix = ""
+                    while content:
+                        last_char = content[-1]
+                        if last_char in "):].,;!?":
+                            if last_char == ')' and content.count('(') >= content.count(')'):
+                                break
+                            if last_char == ']' and content.count('[') >= content.count(']'):
+                                break
+                            if last_char == '}' and content.count('{') >= content.count('}'):
+                                break
+                            stripped_suffix = last_char + stripped_suffix
+                            content = content[:-1]
+                        elif last_char.isspace():
+                            stripped_suffix = last_char + stripped_suffix
+                            content = content[:-1]
+                        else:
+                            break
+                    return rf'\({content.strip()}\){stripped_suffix}'
                 
                 # Math formula pattern containing a backslash command
-                formula_pat = r'((?:[a-zA-Z0-9_]\s*[=<>+\-*/]*\s*)?\\[a-zA-Z,]+(?:[a-zA-Z0-9\s+*/=<>\(\)\{\}\[\]._^\-\\]|(?<![a-zA-Z])[a-zA-Z](?![a-zA-Z]))*)'
+                formula_pat = r'((?:(?<![a-zA-Z])[a-zA-Z0-9_]\s*[=<>+\-*/]*\s*)?\\[a-zA-Z,]+(?:[0-9\s+*/=<>\(\)\{\}\[\]._^\-\\]|(?<![a-zA-Z])[a-zA-Z](?![a-zA-Z]))*)'
                 parts[i] = re.sub(formula_pat, wrap_sub, part)
                 
     temp = "".join(parts)
