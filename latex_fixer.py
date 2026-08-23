@@ -149,9 +149,9 @@ def _normalize_dollar_math_delimiters(text: str, fix_latex: bool = False) -> str
 
     def convert_inline(match):
         inner = match.group(1)
-        # Trust $...$ if it looks even remotely like math or is a single variable
-        # Fixed regex with double backslashes
-        if _looks_like_math_span(inner) or re.fullmatch(r'\s*[A-Za-z0-9\\theta\\alpha\\beta\\gamma\\delta\\epsilon\\phi\\omega\\mu\\pi\\rho\\sigma\\tau]\s*', inner):
+        # Trust $...$ if it looks even remotely like math or is a single
+        # variable / single LaTeX command (e.g. "x", "7", "\theta").
+        if _looks_like_math_span(inner) or re.fullmatch(r'\s*(?:\\[A-Za-z]+|[A-Za-z0-9])\s*', inner):
              return r'\(' + inner.strip() + r'\)'
         return match.group(0)
 
@@ -824,7 +824,7 @@ def repair_latex_control_chars(text: str) -> str:
 
 
 def _wrap_raw_backslashed_commands(val: str) -> str:
-    """Finds segments containing backslash commands and wraps them in \( ... \) if they are not already in a math block."""
+    r"""Finds segments containing backslash commands and wraps them in \( ... \) if they are not already in a math block."""
     if not isinstance(val, str) or '\\' not in val:
         return val
 
